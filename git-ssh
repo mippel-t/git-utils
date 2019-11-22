@@ -1,0 +1,39 @@
+#!/bin/bash
+
+set -eu
+
+readonly PROGNAME="$(basename "$0")"
+
+
+print_usage() {
+  cat <<EOD
+NAME
+    ${PROGNAME} - Identity switcher for Git repository
+
+DESCRIPTION
+    SSH proxy to switch identities depending on the git config.
+
+    To enable this proxy, add
+
+        export GIT_SSH=/path/to/git-ssh
+
+    into your .profile,
+    and set the path to the identity to the git config \`\`gitssh.identity'' in each repository.
+
+OPTIONS
+    -h, --help
+        Print this help.
+
+EOD
+}
+
+
+if [[ "${1:-}" == '-h' || "${1:-}" == '--help' ]]; then
+  print_usage
+  exit
+fi
+
+
+declare identity="$(git config --get gitssh.identity 2>/dev/null)"
+
+exec ssh ${identity:+-i "$identity"} "$@"

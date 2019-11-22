@@ -1,0 +1,195 @@
+#!/bin/bash
+
+set -eu
+
+readonly PROGNAME="$(basename "$0")"
+
+
+print_usage() {
+  cat <<EOD
+NAME
+    ${PROGNAME} - Transfer local data to remote server
+
+SYNOPSIS
+    ${PROGNAME} [-q] [-d] [-H <host>] [-R <root>] [<path>...]
+
+DESCRIPTION
+    Transfer (rsync) <path>'s in a Git repository to a remote server <host>:<root>.
+    Users can modify the transfer targets by editing a target list.
+
+    <path>'s are relative paths of target dirs/files to the current directory.
+    If no <path>'s are specified, all files in the current directory are transferred.
+
+    <host> and <root> can be configured by setting \`\`rsync.host'' and \`\`rsync.root'' in the Git cofig, respectively.
+
+OPTIONS
+    -q, --quiet
+        Do not ask the transfer targets and transfers <path>'s directly.
+
+    -d, --delete
+        Delete dirs/files not existing in the local repository.
+        Corresponding to the --delete option of rsync(1).
+
+    -H, --host=<host>
+        Hostname of the remote server.
+        <host> must be the form of <hostname> or <user>@<hostname>.
+        If omitted, the value of \`\`git config --get rsync.host'' will be used.
+
+    -R, --root=<root>
+        Path corresponding repository root in the remote server.
+        If omitted, the value of \`\`git config --get rsync.root'' will be used.
+
+    -h, --help
+        Print this help.
+
+EOD
+}
+
+
+myrsync() {
+  eval set -- $(getopt -n "${FUNCNAME[0]}" -o ni: -- "$@")
+
+  local dry_run=
+  local include=
+  while (( $# )); do
+    case "$1" in
+      -n)
+        dry_run=1
+        shift
+        ;;
+      -i)
+        include="$2"
+        shift 2
+        ;;
+      --)
+        shift
+        break
+        ;;
+    esac
+  done
+
+  cd "$LOCAL_ROOT"
+
+  rsync -Rrzlogic \
+    ${dry_run:+-n} \
+    ${DELETE:+--delete} \
+    ${EXCLUDE:+--exclude-from="$EXCLUDE"} \
+    ${include:+--include-from="$include" --exclude='**'} \
+    "$@" "${REMOTE_HOST}:${REMOTE_ROOT}/"
+}
+
+
+list_intermediates() {
+  local path="$1"
+
+  if [[ "$path" == '/' ]]; then
+    return
+  fi
+
+  list_intermediates "$(dirname "$path")"
+  echo "${path%/}"
+}
+
+
+parse_targets() {
+  local target_list="$1"
+
+  sed -n 's|^[A-Za-z\.+<>]\{11\} \(.*\)$|\1|p' "$target_list" |
+  while read -r path; do
+    list_intermediates "/$path"
+  done | sort | uniq
+}
+
+
+declare LOCAL_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+declare REMOTE_HOST="$(git config --get rsync.host 2>/dev/null)"
+declare REMOTE_ROOT="$(git config --get rsync.root 2>/dev/null)"
+declare EXCLUDE="$(git config --get rsync.exclude 2>/dev/null)"
+declare DELETE=
+declare QUIET=
+
+eval set -- $(getopt -n "$PROGNAME" -o dqH:R:h -l delete,quiet,host:,root:,help -- "$@")
+
+while (( $# )); do
+  case "$1" in
+    -d|--delete)
+      DELETE=1
+      shift
+      ;;
+    -q|--quiet)
+      QUIET=1
+      shift
+      ;;
+    -H|--host)
+      REMOTE_HOST="$2"
+      shift 2
+      ;;
+    -R|--root)
+      REMOTE_ROOT="$2"
+      shift 2
+      ;;
+    -h|--help)
+      print_usage
+      exit
+      ;;
+    --)
+      shift
+      break
+      ;;
+  esac
+done
+
+if [[ -z "$LOCAL_ROOT" ]]; then
+  echo 'Error: not in a git repository' >&2
+  exit 1
+fi
+
+if [[ -z "$REMOTE_HOST" ]]; then
+  echo 'Error: rsync.host is not set' >&2
+  exit 1
+fi
+
+if [[ -z "$REMOTE_ROOT" ]]; then
+  echo 'Error: rsync.root is not set' >&2
+  exit 1
+fi
+
+if [[ -n "$EXCLUDE" && ! -f "${LOCAL_ROOT}/${EXCLUDE}" ]]; then
+  echo "Warning: '${EXCLUDE}' not exists" >&2
+  EXCLUDE=
+fi
+
+
+# Make path args relative to the repository root
+declare dir="$(realpath --relative-to="$LOCAL_ROOT" "$(pwd)")"
+declare -a paths=()
+
+for path in "${@:-.}"; do
+  paths+=("${dir}/${path%/}")
+done
+
+
+if [[ -n "$QUIET" ]]; then
+  myrsync "${paths[@]}"
+  exit
+fi
+
+
+declare target_list="$(mktemp -t "${PROGNAME}.XXXXXXXXXX")"
+declare include_file="$(mktemp -t "${PROGNAME}.XXXXXXXXXX")"
+
+{
+  echo "# ${LOCAL_ROOT} ----> ${REMOTE_HOST}:${REMOTE_ROOT}"
+  echo "# exclude: ${EXCLUDE:-(none)}"
+  echo "#"
+  echo "# Remove files you don't want to rsync"
+  echo
+  myrsync -n "${paths[@]}"
+} >"$target_list"
+
+${EDITOR:-vim} "$target_list"
+
+parse_targets "$target_list" >"$include_file"
+myrsync -n -i"$include_file" .
+
+rm -f "$target_list" "$include_file"

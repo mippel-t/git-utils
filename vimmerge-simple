@@ -1,0 +1,17 @@
+#!/bin/bash -eu
+
+# Add the following configurations to your global gitconfig:
+#   git config --global merge.tool extMerge
+#   git config --global mergetool.extMerge.cmd '/path/to/vimmerge-simple "$LOCAL" "$REMOTE" "$MERGED"'
+#   git config --global mergetool.keepBackup false
+
+set -eu
+
+LOCAL="$1"
+REMOTE="$2"
+MERGED="$3"
+
+sed '/^<<<<<<</d; /^=======/,/^>>>>>>>/d' "$MERGED" >"$LOCAL"
+sed '/^<<<<<<</,/^=======/d; /^>>>>>>>/d' "$MERGED" >"$REMOTE"
+vimdiff "$LOCAL" "$REMOTE"
+cp "$REMOTE" "$MERGED"
