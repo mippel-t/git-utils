@@ -94,7 +94,7 @@ list_intermediates() {
 parse_targets() {
   local target_list="$1"
 
-  sed -n 's|^[A-Za-z\.+<>]\{11\} \(.*\)$|\1|p' "$target_list" |
+  sed -n 's|^[A-Za-z\.+<>]\{11\} \(.*\)$|\1|p; s|^\*deleting   \(.*\)$|\1|p' "$target_list" |
   while read -r path; do
     list_intermediates "/$path"
   done | sort | uniq
@@ -182,7 +182,7 @@ declare include_file="$(mktemp -t "${PROGNAME}.XXXXXXXXXX")"
   echo "# ${LOCAL_ROOT} ----> ${REMOTE_HOST}:${REMOTE_ROOT}"
   echo "# exclude: ${EXCLUDE:-(none)}"
   echo "#"
-  echo "# Remove files you don't want to rsync"
+  echo "# Remove files (lines) you don't want to upload"
   echo
   myrsync -n "${paths[@]}"
 } >"$target_list"
@@ -190,6 +190,11 @@ declare include_file="$(mktemp -t "${PROGNAME}.XXXXXXXXXX")"
 ${EDITOR:-vim} "$target_list"
 
 parse_targets "$target_list" >"$include_file"
-myrsync -n -i"$include_file" .
+
+if [[ -s "$include_file" ]]; then
+  myrsync -i"$include_file" .
+else
+  echo '(Nothing to upload)'
+fi
 
 rm -f "$target_list" "$include_file"
