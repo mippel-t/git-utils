@@ -11,7 +11,7 @@ NAME
     ${PROGNAME} - Transfer local data to remote server
 
 SYNOPSIS
-    ${PROGNAME} [-q] [-d] [-H <host>] [-R <root>] [<path>...]
+    ${PROGNAME} [-q] [-d] [-f] [-H <host>] [-R <root>] [-e <exclude>] [<path>...]
 
 DESCRIPTION
     Transfer (rsync) <path>'s in a Git repository to a remote server <host>:<root>.
@@ -30,6 +30,9 @@ OPTIONS
         Delete dirs/files not existing in the local repository.
         Corresponding to the --delete option of rsync(1).
 
+    -f, --force
+        Ignore exclusion setting.
+
     -H, --host=<host>
         Hostname of the remote server.
         <host> must be the form of <hostname> or <user>@<hostname>.
@@ -38,6 +41,10 @@ OPTIONS
     -R, --root=<root>
         Path corresponding repository root in the remote server.
         If omitted, the value of \`\`git config --get rsync.root'' will be used.
+
+    -e, --exclude=<exclude>
+        Path to the file listing targets to be excluded.
+        If omitted, the value of \`\`git config --get rsync.exclude'' will be used.
 
     -h, --help
         Print this help.
@@ -70,12 +77,25 @@ myrsync() {
 
   cd "$LOCAL_ROOT"
 
-  rsync -Rrzlogic \
-    ${dry_run:+-n} \
-    ${DELETE:+--delete} \
-    ${EXCLUDE:+--exclude-from="$EXCLUDE"} \
-    ${include:+--include-from="$include" --exclude='**'} \
-    "$@" "${REMOTE_HOST}:${REMOTE_ROOT}/"
+  local -a rsync_options=(-Rrzlogic)
+
+  if [[ -n "$dry_run" ]]; then
+    rsync_options+=(-n)
+  fi
+
+  if [[ -n "$DELETE" ]]; then
+    rsync_options+=(--delete)
+  fi
+
+  if [[ -n "$EXCLUDE" && -z "$FORCE" ]]; then
+    rsync_options+=(--exclude-from="$EXCLUDE")
+  fi
+
+  if [[ -n "$include" ]]; then
+    rsync_options+=(--include-from="$include" --exclude='**')
+  fi
+
+  rsync "${rsync_options[@]}" "$@" "${REMOTE_HOST}:${REMOTE_ROOT}/"
 }
 
 
@@ -107,8 +127,9 @@ declare REMOTE_ROOT="$(git config --get rsync.root 2>/dev/null)"
 declare EXCLUDE="$(git config --get rsync.exclude 2>/dev/null)"
 declare DELETE=
 declare QUIET=
+declare FORCE=
 
-eval set -- $(getopt -n "$PROGNAME" -o dqH:R:h -l delete,quiet,host:,root:,help -- "$@")
+eval set -- $(getopt -n "$PROGNAME" -o dqfH:R:e:h -l delete,quiet,force,host:,root:,exclude:,help -- "$@")
 
 while (( $# )); do
   case "$1" in
@@ -120,12 +141,20 @@ while (( $# )); do
       QUIET=1
       shift
       ;;
+    -f|--force)
+      FORCE=1
+      shift
+      ;;
     -H|--host)
       REMOTE_HOST="$2"
       shift 2
       ;;
     -R|--root)
       REMOTE_ROOT="$2"
+      shift 2
+      ;;
+    -e|--exclude)
+      EXCLUDE="$2"
       shift 2
       ;;
     -h|--help)
